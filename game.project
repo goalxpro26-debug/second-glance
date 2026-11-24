@@ -17,9 +17,6 @@ high_dpi = 1
 [script]
 shared_state = 1
 
-[library]
-include_dirs = gamedistribution
-
 [physics]
 gravity_y = -1000.0
 scale = 0.01
@@ -29,6 +26,3 @@ velocity_threshold = 100.0
 scale_mode = stretch
 show_fullscreen_button = 0
 show_made_with_defold = 0
-
-[gamedistribution]
-game_id = PLACEHOLDER

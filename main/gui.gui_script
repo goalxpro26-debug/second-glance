@@ -396,6 +396,11 @@ end
 
 local function build_critics(self)
   self.critic_nodes = {}
+  -- Light strip behind the three demand texts: the ink text was
+  -- dark-on-dark against the background at the bottom of the screen
+  -- and hard to read. The strip sits below the model card frame
+  -- (which starts at y 85) so it covers no gameplay.
+  new_box(self, false, nil, 210, 22, 350, 46, C.panel)
   local xs = { 90, 210, 330 }
   for i = 1, 3 do
     local img = new_img(self, false, nil, "crit_" .. i, xs[i], 70, 72, 72)
@@ -611,12 +616,17 @@ local function show_play(self, data)
     function() present_outfit(self) end, C.gold)
   next_client(self)
   update_hud(self)
-  -- mission banner
-  local bb = obox(self, nil, W / 2, 480, 600, 70, C.panel)
+  -- mission banner: parked at the bottom of the wardrobe panel, clear of
+  -- the model. It used to sit at (568, 480), overlapping the model's hat
+  -- for the whole 1.6s of the glance (the look's hat was hidden exactly
+  -- when the player most needed to see it). The wardrobe panel's bottom
+  -- strip (y 590-640) is empty: no tabs (end y 582), no grid, no buttons.
+  local bb = obox(self, nil, 830, 615, 600, 50, C.panel)
   gui.set_scale(bb, vmath.vector3(0.9, 0.9, 1))
   gui.animate(bb, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
     gui.EASING_OUTBACK, 0.25)
-  otext(self, bb, "MISSION: " .. self.mission.text, 0, 0, 1.2, C.ink, 560)
+  otext(self, bb, "MISSION: " .. self.mission.text, 0, 0, 1.1, C.ink, 560)
+  self.banner_node = bb
   self.banner_timer = 1.6
   self.banner_active = true
 end
@@ -926,8 +936,15 @@ function update(self, dt)
     if self.banner_timer <= 0 then
       self.banner_active = false
       self.banner_timer = nil
-      if self.screen == "play" and not self.paused then
-        clear_overlay(self)
+      -- Delete the banner node directly: during an ad the game is paused
+      -- when this timer fires, and the old clear_overlay call was gated
+      -- on not-paused, so a pre-roll ad left the banner covering the
+      -- board for the whole level. Deleting the banner while paused is
+      -- safe (it is informational only). Same latent bug exists in the
+      -- GD build; fixed here for the GamePix build.
+      if self.banner_node then
+        pcall(gui.delete_node, self.banner_node)
+        self.banner_node = nil
       end
     end
   end
@@ -1087,9 +1104,9 @@ function on_message(self, message_id, message, sender)
     self.user_paused = false
     self.paused = false
     clear_overlay(self)
-  elseif message_id == hash("gd_pause") then
+  elseif message_id == hash("ad_pause") then
     self.paused = true
-  elseif message_id == hash("gd_resume") then
+  elseif message_id == hash("ad_resume") then
     self.paused = self.user_paused or false
   elseif message_id == hash("set_mute") then
     self.muted = message.muted

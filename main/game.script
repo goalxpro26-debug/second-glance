@@ -1,9 +1,10 @@
--- Second Glance: controller. Owns save data, level flow, GD SDK, music.
+-- Second Glance: controller. Owns save data, level flow, GamePix SDK, music.
 -- The view (gui#gui) owns the wardrobe and all input; this script owns
--- the screens' data, persistence, and ad calls. All gdsdk calls are
--- guarded so the game still runs if the SDK is absent.
+-- the screens' data, persistence, and ad calls. All GamePix calls are
+-- guarded (main/gpx.lua) so the game still runs if the SDK is absent.
 local audio = require("main.audio")
 local levels = require("main.levels")
+local gpx = require("main.gpx")
 
 local GUI = "gui#gui"
 local SAVE_FILE = "second_glance"
@@ -43,6 +44,7 @@ local function show_title(self)
   self.user_paused = false
   stop_music()
   audio.play("bgm_menu")
+  gpx.loaded() -- GamePix lifecycle: game ready (once-only inside)
   msg.post(GUI, "show_title", {
     unlocked = self.save.unlocked,
     stars = self.save.stars,
@@ -68,6 +70,7 @@ local function start_level(self, n, endless)
   local def = endless and levels.ENDLESS or levels.get(n)
   stop_music()
   audio.play("bgm_game")
+  gpx.game_start() -- GamePix lifecycle: real gameplay start (once-only)
   msg.post(GUI, "show_play", {
     level = n,
     endless = endless or false,
@@ -84,41 +87,30 @@ function init(self)
   self.user_paused = false
   audio.register(SOUNDS)
   audio.set_muted(self.muted)
-  if gdsdk then
-    pcall(gdsdk.set_listener, function(s, event, message)
-      print("GD event", event, message)
-      if event == gdsdk.SDK_GAME_PAUSE then
-        self.ad_paused = true
-        audio.set_muted(true)
-        msg.post(GUI, "gd_pause", {})
-      elseif event == gdsdk.SDK_GAME_START
-          or event == gdsdk.CONTENT_RESUME_REQUESTED then
-        self.ad_paused = false
-        audio.set_muted(self.muted)
-        msg.post(GUI, "gd_resume", {})
-      elseif event == gdsdk.SDK_ERROR or event == gdsdk.AD_ERROR
-          or event == gdsdk.AD_SDK_CANCELED then
-        -- Never leave the game stuck muted/paused if an ad fails:
-        -- the SDK sends these INSTEAD of SDK_GAME_START when no ad
-        -- could be shown, so resume here (same pattern as Pocket
-        -- Escape's gd_ads.lua). With a PLACEHOLDER id every ad errors
-        -- instantly; with a real id a failed interstitial must not
-        -- freeze the game either.
-        if self.ad_paused then
-          self.ad_paused = false
-          audio.set_muted(self.muted)
-          msg.post(GUI, "gd_resume", {})
-        end
-      end
-    end)
-  end
   show_title(self)
 end
 
-local function show_ad(self)
-  if gdsdk then
-    pcall(gdsdk.show_interstitial_ad)
+function update(self, dt)
+  -- GamePix ad pause: the Player fires the SDK pause handler before an ad
+  -- and the resume handler after it (or immediately if no ad could be
+  -- shown / the ad errored). The injected glue sets window.__gpx_paused
+  -- and window.__gpx_hidden; poll once per frame and apply transitions.
+  -- The flags are the source of truth, so a missed event can never leave
+  -- the game stuck paused or muted.
+  local want = gpx.poll_paused()
+  if want and not self.ad_paused then
+    self.ad_paused = true
+    audio.set_muted(true)
+    msg.post(GUI, "ad_pause", {})
+  elseif not want and self.ad_paused then
+    self.ad_paused = false
+    audio.set_muted(self.muted)
+    msg.post(GUI, "ad_resume", {})
   end
+end
+
+local function show_ad(self)
+  gpx.show_interstitial()
 end
 
 function on_message(self, message_id, message, sender)
@@ -161,6 +153,7 @@ function on_message(self, message_id, message, sender)
     self.screen = "win"
     stop_music()
     audio.play("sfx_win")
+    gpx.happy_moment("level_complete")
     msg.post(GUI, "show_win", {
       level = n, endless = self.endless, score = message.score or 0,
       stars = stars, has_next = (not self.endless) and n < #levels.LEVELS,
@@ -176,6 +169,7 @@ function on_message(self, message_id, message, sender)
     self.screen = "lose"
     stop_music()
     audio.play("sfx_lose")
+    gpx.sad_moment(self.endless and "game_over" or "level_failed")
     msg.post(GUI, "show_lose", {
       level = self.level, endless = self.endless,
       score = message.score or 0,

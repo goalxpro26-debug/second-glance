@@ -1,0 +1,84 @@
+mouse_trigger {
+  input: MOUSE_BUTTON_1
+  action: "touch"
+}
+touch_trigger {
+  input: TOUCH_MULTI
+  action: "touch"
+}
+key_trigger {
+  input: KEY_1
+  action: "item1"
+}
+key_trigger {
+  input: KEY_2
+  action: "item2"
+}
+key_trigger {
+  input: KEY_3
+  action: "item3"
+}
+key_trigger {
+  input: KEY_4
+  action: "item4"
+}
+key_trigger {
+  input: KEY_5
+  action: "item5"
+}
+key_trigger {
+  input: KEY_6
+  action: "item6"
+}
+key_trigger {
+  input: KEY_Q
+  action: "cat_top"
+}
+key_trigger {
+  input: KEY_W
+  action: "cat_bottom"
+}
+key_trigger {
+  input: KEY_E
+  action: "cat_shoes"
+}
+key_trigger {
+  input: KEY_R
+  action: "cat_hat"
+}
+key_trigger {
+  input: KEY_T
+  action: "cat_extra"
+}
+key_trigger {
+  input: KEY_K
+  action: "peek_key"
+}
+key_trigger {
+  input: KEY_ENTER
+  action: "present_key"
+}
+key_trigger {
+  input: KEY_C
+  action: "clear_key"
+}
+key_trigger {
+  input: KEY_P
+  action: "pause_key"
+}
+key_trigger {
+  input: KEY_ESC
+  action: "pause_key"
+}
+key_trigger {
+  input: KEY_A
+  action: "autoplay"
+}
+key_trigger {
+  input: KEY_U
+  action: "unlock_key"
+}
+key_trigger {
+  input: KEY_M
+  action: "mute_key"
+}

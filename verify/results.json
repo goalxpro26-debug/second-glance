@@ -1,0 +1,107 @@
+[
+  {
+    "name": "page loads, title state reported",
+    "ok": true,
+    "detail": "{\"screen\":\"title\",\"phase\":\"title\",\"level\":\"0\",\"endless\":\"0\",\"score\":\"0\",\"match\":\"0\",\"critics\":\"1\",\"peeks\":\"0\",\"time\":\"0\",\"ref\":\"0,0,0,0,0\",\"outfit\":\"0,0,0,0,0\",\"cat\":\"top\",\"glance\":\"0\",\"presented\":\"0\",\"auto\":\"0\",\"paused\":\"0\",\"clients\":\"0\",\"failed\":\"0\",\"mission\":\"\"}"
+  },
+  {
+    "name": "canvas non-blank (title screenshot, distinct colors)",
+    "ok": true,
+    "detail": "distinct=501"
+  },
+  {
+    "name": "glance phase shows a full reference outfit",
+    "ok": true,
+    "detail": "ref=3,5,2,2,1 phase=glance"
+  },
+  {
+    "name": "level 1 timer running",
+    "ok": true,
+    "detail": "time=149"
+  },
+  {
+    "name": "level 1 peeks available (2)",
+    "ok": true,
+    "detail": "peeks=2"
+  },
+  {
+    "name": "glance ends, dress phase starts",
+    "ok": true,
+    "detail": "phase=dress glance=0"
+  },
+  {
+    "name": "category tab switches to bottom (mouse)",
+    "ok": true,
+    "detail": "cat=bottom"
+  },
+  {
+    "name": "mouse tap dresses a wrong item (outfit changes, match < 500)",
+    "ok": true,
+    "detail": "outfit=0,1,0,0,0 match=20"
+  },
+  {
+    "name": "peek costs one peek (2 -> 1)",
+    "ok": true,
+    "detail": "peeks=1"
+  },
+  {
+    "name": "pause key pauses",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"phase\":\"dress\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"-50\",\"match\":\"20\",\"critics\":\"1\",\"peeks\":\"1\",\"time\":\"140\",\"ref\":\"3,5,2,2,1\",\"outfit\":\"0,1,0,0,0\",\"cat\":\"bottom\",\"glance\":\"0\",\"presented\":\"0\",\"auto\":\"0\",\"paused\":\"1\",\"clients\":\"0\",\"failed\":\"0\",\"mission\":\"Match 300 of the look!\"}"
+  },
+  {
+    "name": "pause key resumes",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"phase\":\"dress\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"-50\",\"match\":\"20\",\"critics\":\"1\",\"peeks\":\"1\",\"time\":\"140\",\"ref\":\"3,5,2,2,1\",\"outfit\":\"0,1,0,0,0\",\"cat\":\"bottom\",\"glance\":\"0\",\"presented\":\"0\",\"auto\":\"0\",\"paused\":\"0\",\"clients\":\"0\",\"failed\":\"0\",\"mission\":\"Match 300 of the look!\"}"
+  },
+  {
+    "name": "autoplay turns on",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"phase\":\"dress\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"-50\",\"match\":\"20\",\"critics\":\"1\",\"peeks\":\"1\",\"time\":\"135\",\"ref\":\"3,5,2,2,1\",\"outfit\":\"0,1,0,0,0\",\"cat\":\"bottom\",\"glance\":\"0\",\"presented\":\"0\",\"auto\":\"1\",\"paused\":\"0\",\"clients\":\"0\",\"failed\":\"0\",\"mission\":\"Match 300 of the look!\"}"
+  },
+  {
+    "name": "level 1 won by autoplay",
+    "ok": true,
+    "detail": "score=750 match=500 critics=3"
+  },
+  {
+    "name": "score increased during play",
+    "ok": true,
+    "detail": "score=750"
+  },
+  {
+    "name": "level 2 starts (glance phase, ref populated)",
+    "ok": true,
+    "detail": "level=2 ref=1,1,5,1,4 phase=glance"
+  },
+  {
+    "name": "MENU button returns to title",
+    "ok": true,
+    "detail": "{\"screen\":\"title\",\"phase\":\"title\",\"level\":\"2\",\"endless\":\"0\",\"score\":\"0\",\"match\":\"0\",\"critics\":\"1\",\"peeks\":\"2\",\"time\":\"149\",\"ref\":\"1,1,5,1,4\",\"outfit\":\"0,0,0,0,0\",\"cat\":\"top\",\"glance\":\"5\",\"presented\":\"0\",\"auto\":\"1\",\"paused\":\"0\",\"clients\":\"0\",\"failed\":\"0\",\"mission\":\"Score 600 points\"}"
+  },
+  {
+    "name": "pause in endless works",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"phase\":\"glance\",\"level\":\"1\",\"endless\":\"1\",\"score\":\"0\",\"match\":\"0\",\"critics\":\"1\",\"peeks\":\"1\",\"time\":\"210\",\"ref\":\"3,3,3,2,1\",\"outfit\":\"0,0,0,0,0\",\"cat\":\"top\",\"glance\":\"4\",\"presented\":\"0\",\"auto\":\"1\",\"paused\":\"1\",\"clients\":\"0\",\"failed\":\"0\",\"mission\":\"Clients keep coming - 3 fails ends it!\"}"
+  },
+  {
+    "name": "resume in endless works",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"phase\":\"glance\",\"level\":\"1\",\"endless\":\"1\",\"score\":\"0\",\"match\":\"0\",\"critics\":\"1\",\"peeks\":\"1\",\"time\":\"210\",\"ref\":\"3,3,3,2,1\",\"outfit\":\"0,0,0,0,0\",\"cat\":\"top\",\"glance\":\"3\",\"presented\":\"0\",\"auto\":\"1\",\"paused\":\"0\",\"clients\":\"0\",\"failed\":\"0\",\"mission\":\"Clients keep coming - 3 fails ends it!\"}"
+  },
+  {
+    "name": "endless mode serves a client / scores",
+    "ok": true,
+    "detail": "clients=1 score=800 screen=play screen=play"
+  },
+  {
+    "name": "mute toggle clickable (no crash)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "no page/console errors (excluding GD SDK network noise)",
+    "ok": true,
+    "detail": ""
+  }
+]

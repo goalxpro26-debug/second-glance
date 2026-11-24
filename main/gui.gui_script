@@ -1,0 +1,1141 @@
+-- Second Glance: view layer. Owns every screen, the wardrobe, the model,
+-- critics, input (mouse + touch + keyboard), animations, and mission
+-- tracking. The controller (game#game) owns save data, level flow, ads
+-- and music.
+local audio = require("main.audio")
+local outfit = require("main.outfit")
+local levels = require("main.levels")
+
+local W, H = 1136, 640
+local GAME = "game#game"
+
+-- FORWARD DECLARATIONS: every local function referenced in an earlier
+-- closure must be declared here first, or real clicks do nothing.
+local present_outfit
+local pick_item
+local switch_category
+local do_peek
+local do_clear
+local next_client
+local sync_model
+local update_critics
+local update_hud
+
+local MODEL_X, MODEL_Y = 300, 320
+local TAB_Y = 560
+local TAB_X = { 610, 720, 830, 940, 1050 }
+local GRID_X = { 640, 810, 980 }
+local GRID_Y = { 430, 290 }
+
+local C = {
+  white   = vmath.vector4(1, 1, 1, 1),
+  ink     = vmath.vector4(0.20, 0.14, 0.10, 1),
+  panel   = vmath.vector4(0.99, 0.94, 0.84, 1),
+  btn     = vmath.vector4(0.85, 0.32, 0.22, 1),
+  btn2    = vmath.vector4(0.95, 0.65, 0.20, 1),
+  btn_dim = vmath.vector4(0.55, 0.55, 0.55, 1),
+  dim     = vmath.vector4(0, 0, 0, 0.55),
+  danger  = vmath.vector4(0.9, 0.25, 0.25, 1),
+  gold    = vmath.vector4(1, 0.8, 0.25, 1),
+  green   = vmath.vector4(0.30, 0.75, 0.35, 1),
+  orange  = vmath.vector4(0.95, 0.55, 0.15, 1),
+  indigo  = vmath.vector4(0.16, 0.14, 0.32, 1),
+  sel     = vmath.vector4(1, 0.82, 0.35, 1),
+  clear   = vmath.vector4(1, 1, 1, 0),
+}
+
+local CRITIC_NAMES = { "Gran", "Friend", "Photo" }
+local CRITIC_DEMANDS = {
+  "WARM: cozy, or a hat",
+  "BOLD: red or purple",
+  "MATCHED: 3 colors max",
+}
+
+-- ------------------------------------------------------------ node helpers --
+
+local function track(self, node, overlay)
+  if overlay then self.onodes[#self.onodes + 1] = node
+  else self.nodes[#self.nodes + 1] = node end
+  return node
+end
+
+local function new_box(self, overlay, parent, x, y, w, h, color)
+  local n = gui.new_box_node(vmath.vector3(x, y, 0), vmath.vector3(w, h, 0))
+  gui.set_pivot(n, gui.PIVOT_CENTER)
+  gui.set_color(n, color or C.white)
+  if parent then gui.set_parent(n, parent) else track(self, n, overlay) end
+  return n
+end
+
+local function new_img(self, overlay, parent, image, x, y, w, h)
+  local n = new_box(self, overlay, parent, x, y, w, h, C.white)
+  gui.set_texture(n, "atlas")
+  gui.play_flipbook(n, hash(image))
+  return n
+end
+
+local function new_text(self, overlay, parent, str, x, y, scale, color, wrap_w)
+  local n = gui.new_text_node(vmath.vector3(x, y, 0), str or "")
+  gui.set_font(n, "default")
+  gui.set_pivot(n, gui.PIVOT_CENTER)
+  gui.set_scale(n, vmath.vector3(scale or 1, scale or 1, 1))
+  gui.set_color(n, color or C.white)
+  if wrap_w then
+    gui.set_line_break(n, true)
+    gui.set_size(n, vmath.vector3(wrap_w, 4000, 0))
+  end
+  if parent then gui.set_parent(n, parent) else track(self, n, overlay) end
+  return n
+end
+
+local function pick(self, node, cb, overlay, grid)
+  self.pick[#self.pick + 1] = { node = node, cb = cb, overlay = overlay,
+                                grid = grid or false }
+end
+
+local function button(self, overlay, parent, label, x, y, w, h, scale, cb, color)
+  local b = new_box(self, overlay, parent, x, y, w, h, color or C.btn)
+  local t = new_text(self, overlay, b, label, 0, 0, scale or 1.1, C.white)
+  pick(self, b, function()
+    audio.play("sfx_click")
+    gui.animate(b, gui.PROP_SCALE, vmath.vector3(0.92, 0.92, 1),
+      gui.EASING_OUT, 0.06, 0, function()
+        gui.animate(b, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+          gui.EASING_OUTBACK, 0.12)
+      end)
+    cb()
+  end, overlay)
+  return b, t
+end
+
+local function obox(self, parent, x, y, w, h, color)
+  return new_box(self, true, parent, x, y, w, h, color)
+end
+
+local function otext(self, parent, str, x, y, scale, color, wrap_w)
+  return new_text(self, true, parent, str, x, y, scale, color, wrap_w)
+end
+
+local function oimg(self, parent, image, x, y, w, h)
+  return new_img(self, true, parent, image, x, y, w, h)
+end
+
+local function clear_all(self)
+  for _, n in ipairs(self.nodes) do pcall(gui.delete_node, n) end
+  for _, n in ipairs(self.onodes) do pcall(gui.delete_node, n) end
+  self.nodes, self.onodes, self.pick = {}, {}, {}
+  self.overlay_up = false -- no panel showing after a full screen rebuild
+  self.particles = {}
+  self.popups = {}
+  self.grid_nodes = {}
+  self.tab_nodes = {}
+  self.model_nodes = {}
+  self.critic_nodes = {}
+  self.gen = (self.gen or 0) + 1
+end
+
+local function clear_overlay(self)
+  for _, n in ipairs(self.onodes) do pcall(gui.delete_node, n) end
+  self.onodes = {}
+  local keep = {}
+  for _, p in ipairs(self.pick) do
+    if not p.overlay then keep[#keep + 1] = p end
+  end
+  self.pick = keep
+  self.gen = (self.gen or 0) + 1
+  self.overlay_up = false -- the panel is gone; play-screen picks live again
+end
+
+local function clear_grid(self)
+  for _, n in ipairs(self.grid_nodes or {}) do pcall(gui.delete_node, n) end
+  self.grid_nodes = {}
+  local keep = {}
+  for _, p in ipairs(self.pick) do
+    if not p.grid then keep[#keep + 1] = p end
+  end
+  self.pick = keep
+end
+
+local function bg(self)
+  new_img(self, false, nil, "background", W / 2, H / 2, W, H)
+end
+
+local function panel(self, w, h)
+  obox(self, nil, 0, 0, W, H, C.dim)
+  local p = obox(self, nil, W / 2, H / 2, w, h, C.panel)
+  gui.set_scale(p, vmath.vector3(0.9, 0.9, 1))
+  gui.animate(p, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+    gui.EASING_OUTBACK, 0.25)
+  self.overlay_up = true -- while a panel is up, only overlay picks count
+  return p
+end
+
+-- ------------------------------------------------------------------ HUD --
+
+local function fmt_time(s)
+  s = math.max(0, math.ceil(s or 0))
+  return string.format("%d:%02d", math.floor(s / 60), s % 60)
+end
+
+local function mission_progress(self)
+  local m = self.mission
+  if not m then return "" end
+  if m.type == "match" then
+    local match = outfit.match(self.outfit or outfit.new(), self.ref or outfit.new())
+    return "Match: " .. match .. " / " .. (m.target or 0)
+  elseif m.type == "score" then
+    return "Score: " .. self.score .. " / " .. (m.target or 0)
+  elseif m.type == "perfect" then
+    local _, exact = outfit.match(self.outfit or outfit.new(), self.ref or outfit.new())
+    return "Exact: " .. exact .. " / 5"
+  elseif m.type == "critics" then
+    return "Critics: " .. outfit.critic_count(self.outfit or outfit.new()) .. " / 3"
+  elseif m.type == "endless" then
+    return "Clients: " .. (self.clients or 0) .. "   Failed: " .. (self.failed or 0) .. " / 3"
+  end
+  return ""
+end
+
+update_hud = function(self)
+  if self.hud_score then
+    gui.set_text(self.hud_score, "Score  " .. self.score)
+  end
+  if self.hud_timer then
+    if self.endless then
+      gui.set_text(self.hud_timer, fmt_time(self.elapsed))
+      gui.set_color(self.hud_timer, C.white)
+    else
+      gui.set_text(self.hud_timer, fmt_time(self.time_left))
+      if self.time_left and self.time_left < 30 then
+        gui.set_color(self.hud_timer, C.danger)
+      else
+        gui.set_color(self.hud_timer, C.white)
+      end
+    end
+  end
+  if self.hud_mission then
+    gui.set_text(self.hud_mission, mission_progress(self))
+  end
+  if self.hud_peeks then
+    gui.set_text(self.hud_peeks, "Peeks left: " .. (self.peeks_left or 0))
+  end
+  if self.hud_glance and self.phase == "glance" then
+    gui.set_text(self.hud_glance, "Look close! " .. math.ceil(self.glance_left or 0) .. "s")
+  elseif self.hud_glance then
+    gui.set_text(self.hud_glance, "")
+  end
+end
+
+local function popup(self, x, y, str, color)
+  local n = new_text(self, false, nil, str, x, y, 1.1, color or C.gold)
+  gui.set_scale(n, vmath.vector3(0.6, 0.6, 1))
+  gui.animate(n, gui.PROP_SCALE, vmath.vector3(1.15, 1.15, 1),
+    gui.EASING_OUTBACK, 0.18)
+  self.popups[#self.popups + 1] = { node = n, life = 0.9 }
+end
+
+local function burst(self, x, y, color, n)
+  for i = 1, n or 6 do
+    local a = math.random() * math.pi * 2
+    local sp = 120 + math.random() * 260
+    local node = new_img(self, false, nil, "particle", x, y, 18, 18)
+    gui.set_color(node, color or C.white)
+    self.particles[#self.particles + 1] = {
+      node = node, vx = math.cos(a) * sp, vy = math.sin(a) * sp, life = 0.55,
+    }
+  end
+end
+
+local function confetti(self)
+  local cols = { C.gold, C.btn, C.green, C.btn2, C.white }
+  for i = 1, 46 do
+    local node = new_img(self, false, nil, "particle",
+      math.random(40, W - 40), H + 20, 20, 20)
+    gui.set_color(node, cols[math.random(#cols)])
+    self.particles[#self.particles + 1] = {
+      node = node, vx = (math.random() - 0.5) * 120,
+      vy = -(140 + math.random() * 160), life = 1.6, confetti = true,
+    }
+  end
+end
+
+-- ---------------------------------------------------------------- screens --
+
+local function show_title(self, data)
+  self.screen = "title"
+  self.phase = "title"
+  self.paused = false
+  self.user_paused = false
+  clear_all(self)
+  bg(self)
+  new_img(self, false, nil, "g_top_3", 150, 520, 120, 252)
+  new_img(self, false, nil, "g_hat_2", 986, 520, 96, 96)
+  new_img(self, false, nil, "g_extra_1", 110, 400, 84, 84)
+  new_img(self, false, nil, "g_shoes_2", 1026, 400, 84, 84)
+  new_text(self, false, nil, "Second", 568, 514, 3.0, C.ink)
+  new_text(self, false, nil, "GLANCE", 568, 440, 2.2, C.btn)
+  new_text(self, false, nil, "One look. Then dress them from memory.",
+    568, 392, 0.95, C.ink)
+  local play = button(self, false, nil, "PLAY", 568, 312, 320, 80, 1.6,
+    function() msg.post(GAME, "ui_play", {}) end, C.btn)
+  gui.animate(play, gui.PROP_SCALE, vmath.vector3(1.06, 1.06, 1),
+    gui.EASING_INOUTSINE, 0.7, 0, nil, gui.PLAYBACK_LOOP_PINGPONG)
+  button(self, false, nil, "LEVELS", 400, 210, 260, 64, 1.2,
+    function() msg.post(GAME, "ui_levels", {}) end, C.btn2)
+  button(self, false, nil, "ENDLESS", 736, 210, 260, 64, 1.2,
+    function() msg.post(GAME, "ui_endless", {}) end, C.btn2)
+  button(self, false, nil, "HOW TO PLAY", 568, 130, 320, 64, 1.2,
+    function() msg.post(GAME, "ui_howto", {}) end)
+  if data.endless_best and data.endless_best > 0 then
+    new_text(self, false, nil, "Endless best: " .. data.endless_best,
+      568, 76, 1.0, C.ink)
+  end
+  new_text(self, false, nil, "An original game by ORQA",
+    568, 36, 0.8, C.ink)
+  self.mute_btn, self.mute_label = button(self, false, nil,
+    (self.muted and "SOUND OFF" or "SOUND ON"), 1030, 600, 150, 48, 0.85,
+    function() msg.post(GAME, "ui_mute", {}) end)
+end
+
+local function show_levels(self, data)
+  self.screen = "levels"
+  self.phase = "levels"
+  clear_all(self)
+  bg(self)
+  new_text(self, false, nil, "Pick a Level", 568, 590, 2.0, C.ink)
+  local unlocked = data.unlocked or 1
+  for i = 1, #levels.LEVELS do
+    local col = (i - 1) % 4
+    local row = math.floor((i - 1) / 4)
+    local x = 218 + col * 240
+    local y = 460 - row * 150
+    local locked = i > unlocked
+    local b = new_box(self, false, nil, x, y, 150, 120,
+      locked and C.btn_dim or C.btn)
+    new_text(self, false, b, tostring(i), 0, 16, 1.8, C.white)
+    if locked then
+      new_img(self, false, b, "lock", 0, -34, 36, 45)
+    else
+      local stars = (data.stars and data.stars[i]) or 0
+      for s = 1, 3 do
+        local st = new_img(self, false, b, "star",
+          (s - 2) * 34, -38, 30, 30)
+        if s > stars then
+          gui.set_color(st, vmath.vector4(0.6, 0.6, 0.6, 0.7))
+        end
+      end
+      pick(self, b, function()
+        audio.play("sfx_click")
+        msg.post(GAME, "ui_pick_level", { level = i })
+      end)
+    end
+  end
+  button(self, false, nil, "BACK", 568, 70, 220, 64, 1.2,
+    function() msg.post(GAME, "ui_quit", {}) end)
+end
+
+-- ------------------------------------------------------------ model/wardrobe --
+
+-- Draw the model wearing `o` (an outfit table). Slots with 0 are hidden.
+sync_model = function(self, o)
+  o = o or self.outfit
+  if not self.model_nodes.body then return end
+  -- draw order is fixed by creation order: body, bottom, shoes, top,
+  -- hat, extra (later nodes draw on top).
+  local slots = { "bottom", "shoes", "top", "hat", "extra" }
+  for _, cat in ipairs(slots) do
+    local node = self.model_nodes[cat]
+    if node then
+      local idx = o[cat] or 0
+      if idx > 0 then
+        gui.play_flipbook(node, hash("g_" .. cat .. "_" .. idx))
+        gui.set_color(node, C.white)
+      else
+        gui.set_color(node, C.clear)
+      end
+    end
+  end
+end
+
+local function build_model(self)
+  self.model_nodes = {}
+  -- style-card frame behind the model, shown during GLANCE
+  self.card_frame = new_box(self, false, nil, MODEL_X, MODEL_Y,
+    260, 470, vmath.vector4(0.99, 0.94, 0.84, 0.95))
+  self.card_label = new_text(self, false, nil, "STYLE CARD",
+    MODEL_X, 568, 1.0, C.ink)
+  self.client_label = new_text(self, false, nil, "",
+    MODEL_X, 540, 0.9, C.btn)
+  local body = new_img(self, false, nil, "body", MODEL_X, MODEL_Y, 200, 420)
+  self.model_nodes.body = body
+  for _, cat in ipairs({ "bottom", "shoes", "top", "hat", "extra" }) do
+    local n = new_img(self, false, nil, "g_" .. cat .. "_1",
+      MODEL_X, MODEL_Y, 200, 420)
+    gui.set_color(n, C.clear)
+    self.model_nodes[cat] = n
+  end
+end
+
+update_critics = function(self)
+  if not self.critic_nodes or not self.critic_nodes[1] then return end
+  local d = outfit.critics(self.outfit or outfit.new())
+  local vals = { d.warm, d.bold, d.matched }
+  for i = 1, 3 do
+    local cn = self.critic_nodes[i]
+    if cn and cn.tick then
+      if vals[i] then
+        gui.set_text(cn.tick, "✓")
+        gui.set_color(cn.tick, C.green)
+      else
+        gui.set_text(cn.tick, "✗")
+        gui.set_color(cn.tick, C.danger)
+      end
+    end
+  end
+end
+
+local function build_critics(self)
+  self.critic_nodes = {}
+  local xs = { 90, 210, 330 }
+  for i = 1, 3 do
+    local img = new_img(self, false, nil, "crit_" .. i, xs[i], 70, 72, 72)
+    local name = new_text(self, false, nil, CRITIC_NAMES[i],
+      xs[i], 118, 0.75, C.ink)
+    local dem = new_text(self, false, nil, CRITIC_DEMANDS[i],
+      xs[i], 22, 0.55, C.ink, 110)
+    local tick = new_text(self, false, nil, "✗", xs[i] + 48, 70, 1.2, C.danger)
+    self.critic_nodes[i] = { img = img, tick = tick }
+  end
+end
+
+local function build_tabs(self)
+  self.tab_nodes = {}
+  for i, cat in ipairs(levels.CATS) do
+    local b = new_box(self, false, nil, TAB_X[i], TAB_Y, 100, 44,
+      cat == self.cat and C.sel or C.btn2)
+    local t = new_text(self, false, b, levels.CAT_LABELS[cat], 0, 0, 0.9, C.white)
+    self.tab_nodes[cat] = b
+    local c = cat
+    pick(self, b, function()
+      audio.play("sfx_click")
+      switch_category(self, c)
+    end)
+  end
+end
+
+local function build_grid(self)
+  clear_grid(self)
+  local cat = self.cat
+  local list = levels.GARMENTS[cat]
+  for i, g in ipairs(list) do
+    local col = (i - 1) % 3
+    local row = math.floor((i - 1) / 3)
+    local x = GRID_X[col + 1]
+    local y = GRID_Y[row + 1]
+    local worn = self.outfit and self.outfit[cat] == i
+    local b = new_box(self, false, nil, x, y, 160, 120,
+      worn and C.sel or C.panel)
+    self.grid_nodes[#self.grid_nodes + 1] = b
+    local img = new_img(self, false, b, "g_" .. cat .. "_" .. i, 0, 12, 96, 96)
+    self.grid_nodes[#self.grid_nodes + 1] = img
+    local lbl = new_text(self, false, b, g.name, 0, -48, 0.7, C.ink)
+    self.grid_nodes[#self.grid_nodes + 1] = lbl
+    local idx = i
+    pick(self, b, function() pick_item(self, idx) end, false, true)
+    pick(self, img, function() pick_item(self, idx) end, false, true)
+  end
+end
+
+switch_category = function(self, cat)
+  if self.screen ~= "play" then return end
+  self.cat = cat
+  for c, node in pairs(self.tab_nodes or {}) do
+    gui.set_color(node, c == cat and C.sel or C.btn2)
+  end
+  build_grid(self)
+end
+
+pick_item = function(self, i)
+  if self.screen ~= "play" or self.paused or self.over then return end
+  if self.phase ~= "dress" then return end
+  if self.peek_active then return end
+  if not self.cat then return end
+  if i < 1 or i > levels.count(self.cat) then return end
+  if self.outfit[self.cat] == i then
+    self.outfit[self.cat] = 0
+  else
+    self.outfit[self.cat] = i
+  end
+  audio.play("sfx_pick")
+  sync_model(self, self.outfit)
+  local node = self.model_nodes[self.cat]
+  if node then
+    gui.set_scale(node, vmath.vector3(0.85, 0.85, 1))
+    gui.animate(node, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+      gui.EASING_OUTBACK, 0.22)
+  end
+  burst(self, MODEL_X, MODEL_Y, C.gold, 4)
+  build_grid(self)
+  update_critics(self)
+  update_hud(self)
+end
+
+do_clear = function(self)
+  if self.screen ~= "play" or self.paused or self.over then return end
+  if self.phase ~= "dress" then return end
+  if self.peek_active then return end
+  self.outfit = outfit.new()
+  audio.play("sfx_click")
+  sync_model(self, self.outfit)
+  build_grid(self)
+  update_critics(self)
+  update_hud(self)
+end
+
+do_peek = function(self)
+  if self.screen ~= "play" or self.paused or self.over then return end
+  if self.phase ~= "dress" then return end
+  if self.peek_active then return end
+  if (self.peeks_left or 0) <= 0 then
+    popup(self, 830, 220, "No peeks left!", C.danger)
+    return
+  end
+  self.peeks_left = self.peeks_left - 1
+  self.peeks_used = (self.peeks_used or 0) + 1
+  self.score = self.score - 50
+  self.peek_active = true
+  self.peek_timer = 2.0
+  audio.play("sfx_peek")
+  sync_model(self, self.ref)
+  if self.card_frame then gui.set_color(self.card_frame,
+    vmath.vector4(0.99, 0.94, 0.84, 0.95)) end
+  if self.card_label then gui.set_text(self.card_label, "PEEK!") end
+  popup(self, MODEL_X, 560, "Peek! -50", C.orange)
+  update_hud(self)
+end
+
+-- Start (or restart) one client: new ref, glance phase, empty outfit.
+next_client = function(self)
+  self.outfit = outfit.new()
+  self.peeks_used = 0
+  self.presented = 0
+  self.peek_active = false
+  self.peek_timer = 0
+  self.ai_step = 0
+  if self.endless then
+    self.ref = levels.random_ref()
+    local n = (self.clients or 0) + 1
+    local c = levels.ENDLESS_CLIENTS[((n - 1) % #levels.ENDLESS_CLIENTS) + 1]
+    self.client = c.name
+    self.occasion = c.occasion
+    self.glance_time = math.max(3.0, 4.0 - (n - 1) * 0.2)
+    self.peeks_left = 1
+  else
+    local lv = levels.get(self.level)
+    self.ref = outfit.copy(lv.ref)
+    self.client = lv.client
+    self.occasion = lv.occasion
+    self.glance_time = lv.glance
+    self.peeks_left = lv.peeks
+  end
+  self.phase = "glance"
+  self.glance_left = self.glance_time
+  self.curtain = nil
+  self.curtain_timer = 0
+  sync_model(self, self.ref)
+  if self.card_frame then gui.set_color(self.card_frame,
+    vmath.vector4(0.99, 0.94, 0.84, 0.95)) end
+  if self.card_label then gui.set_text(self.card_label, "STYLE CARD") end
+  if self.client_label then
+    gui.set_text(self.client_label,
+      self.client .. " - " .. self.occasion)
+  end
+  self.cat = "top"
+  for c, node in pairs(self.tab_nodes or {}) do
+    gui.set_color(node, c == "top" and C.sel or C.btn2)
+  end
+  build_grid(self)
+  update_critics(self)
+  update_hud(self)
+end
+
+-- ------------------------------------------------------------------ play --
+
+local function show_play(self, data)
+  self.screen = "play"
+  self.level = data.level or 1
+  self.endless = data.endless or false
+  self.def = data.def
+  self.mission = data.def.mission
+  self.time_left = data.def.time or 0
+  self.total_time = data.def.time or 0
+  self.score = 0
+  self.endless_score = 0
+  self.elapsed = 0
+  self.over = false
+  self.end_pending = nil
+  self.end_timer = 0
+  self.ai_timer = 1.0
+  self.ai_step = 0
+  self.paused = false
+  self.user_paused = false -- a fresh game clears any stale pause state
+  self.clients = 0
+  self.failed = 0
+  self.presented = 0
+  self.glance_left = 0
+  self.banner_active = false
+  self.banner_timer = nil
+  clear_all(self)
+  bg(self)
+  -- HUD
+  self.hud_score = new_text(self, false, nil, "Score  0", 100, 610, 1.0, C.white)
+  self.hud_timer = new_text(self, false, nil, fmt_time(self.time_left),
+    568, 610, 1.3, C.white)
+  self.hud_mission = new_text(self, false, nil, "", 568, 580, 0.85, C.ink)
+  self.hud_glance = new_text(self, false, nil, "", 300, 590, 1.0, C.gold)
+  self.hud_peeks = new_text(self, false, nil, "", 640, 190, 0.85, C.ink)
+  button(self, false, nil, "MENU", 1096, 606, 52, 48, 0.8,
+    function() msg.post(GAME, "ui_quit", {}) end, C.btn2)
+  -- wardrobe panel
+  new_box(self, false, nil, 830, 360, 540, 560,
+    vmath.vector4(0.99, 0.94, 0.84, 0.55))
+  build_model(self)
+  build_critics(self)
+  build_tabs(self)
+  -- action buttons
+  button(self, false, nil, "PEEK (K)", 640, 150, 160, 56, 1.0,
+    function() do_peek(self) end, C.btn2)
+  button(self, false, nil, "CLEAR (C)", 810, 150, 160, 56, 1.0,
+    function() do_clear(self) end, C.btn2)
+  button(self, false, nil, "PRESENT", 980, 150, 200, 64, 1.2,
+    function() present_outfit(self) end, C.gold)
+  next_client(self)
+  update_hud(self)
+  -- mission banner
+  local bb = obox(self, nil, W / 2, 480, 600, 70, C.panel)
+  gui.set_scale(bb, vmath.vector3(0.9, 0.9, 1))
+  gui.animate(bb, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+    gui.EASING_OUTBACK, 0.25)
+  otext(self, bb, "MISSION: " .. self.mission.text, 0, 0, 1.2, C.ink, 560)
+  self.banner_timer = 1.6
+  self.banner_active = true
+end
+
+-- --------------------------------------------------------------- overlays --
+
+local function show_pause(self)
+  self.paused = true
+  clear_overlay(self)
+  local p = panel(self, 460, 460)
+  otext(self, p, "PAUSED", 0, 170, 2.0, C.ink)
+  button(self, true, p, "RESUME", 0, 80, 320, 72, 1.2,
+    function() msg.post(GAME, "ui_resume", {}) end)
+  button(self, true, p, "RESTART", 0, -10, 320, 72, 1.2,
+    function() msg.post(GAME, "ui_retry", {}) end, C.btn2)
+  button(self, true, p, "SOUND: " .. (self.muted and "OFF" or "ON"),
+    0, -100, 320, 72, 1.2,
+    function() msg.post(GAME, "ui_mute", {}) end, C.btn2)
+  button(self, true, p, "QUIT TO TITLE", 0, -180, 320, 64, 1.1,
+    function() msg.post(GAME, "ui_quit", {}) end)
+end
+
+local function show_win(self, data)
+  self.screen = "win"
+  self.phase = "win"
+  clear_overlay(self)
+  confetti(self)
+  audio.play("sfx_mission")
+  local p = panel(self, 520, 600)
+  otext(self, p, "LOOK NAILED IT!", 0, 220, 1.7, C.btn)
+  otext(self, p, "The guest loved the look!", 0, 172, 1.1, C.ink)
+  for s = 1, 3 do
+    local st = oimg(self, p, "star", (s - 2) * 90, 92, 72, 72)
+    gui.set_scale(st, vmath.vector3(0.2, 0.2, 1))
+    if s <= (data.stars or 1) then
+      gui.animate(st, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+        gui.EASING_OUTBACK, 0.35, 0.15 + s * 0.18)
+    else
+      gui.set_color(st, vmath.vector4(0.6, 0.6, 0.6, 0.7))
+      gui.animate(st, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+        gui.EASING_OUTBACK, 0.35, 0.15 + s * 0.18)
+    end
+  end
+  otext(self, p, "Score  " .. (data.score or 0), 0, 8, 1.3, C.ink)
+  otext(self, p, "Match " .. (data.match or 0) .. " / 500   Critics " ..
+    (data.critics or 0) .. " / 3", 0, -38, 1.0, C.ink)
+  local y = -82
+  if data.has_next then
+    button(self, true, p, "NEXT LEVEL", 0, y, 340, 76, 1.3,
+      function() msg.post(GAME, "ui_next", {}) end)
+    y = y - 85
+  end
+  button(self, true, p, "REPLAY", 0, y, 340, 72, 1.2,
+    function() msg.post(GAME, "ui_retry", {}) end, C.btn2)
+  button(self, true, p, "LEVELS", 0, y - 85, 340, 72, 1.2,
+    function() msg.post(GAME, "ui_levels", {}) end, C.btn2)
+end
+
+local function show_lose(self, data)
+  self.screen = "lose"
+  self.phase = "lose"
+  clear_overlay(self)
+  local p = panel(self, 520, 460)
+  otext(self, p, "THE GUEST LEFT!", 0, 170, 1.9, C.danger)
+  if data.endless then
+    otext(self, p, "Three guests left unhappy!", 0, 115, 1.1, C.ink)
+    otext(self, p, "Score  " .. (data.score or 0), 0, 55, 1.3, C.ink)
+    otext(self, p, "Best  " .. (data.best or 0), 0, 5, 1.1, C.ink)
+  else
+    otext(self, p, data.reason or "Out of time - try again!", 0, 115, 1.1, C.ink, 460)
+    otext(self, p, "Score  " .. (data.score or 0), 0, 55, 1.3, C.ink)
+  end
+  button(self, true, p, "TRY AGAIN", 0, -70, 340, 76, 1.3,
+    function() msg.post(GAME, "ui_retry", {}) end)
+  button(self, true, p, "LEVELS", 0, -160, 340, 72, 1.2,
+    function() msg.post(GAME, "ui_levels", {}) end, C.btn2)
+end
+
+local function show_howto(self)
+  clear_overlay(self)
+  local p = panel(self, 700, 520)
+  otext(self, p, "HOW TO PLAY", 0, 210, 1.8, C.ink)
+  otext(self, p,
+    "The guest shows you their look ONCE. Memorise it - then the " ..
+    "curtain drops and you rebuild it from memory.\n\n" ..
+    "Pick a tab (TOP, BOTTOM, SHOES, HAT, EXTRA), tap a garment to " ..
+    "dress the model. Tap the worn item again to remove it.\n\n" ..
+    "Three critics watch: Gran wants WARM, your Friend wants BOLD, " ..
+    "the Photographer wants MATCHED (3 colors max). Their ticks " ..
+    "update live - they are clues to the look.\n\n" ..
+    "PEEK shows the look again for 2s (-50 points). PRESENT submits " ..
+    "your outfit: exact garment 100, same color 40, same style 20.\n\n" ..
+    "Keys: 1-6 pick an item, Q/W/E/R/T switch tabs, K peek, " ..
+    "Enter present, C clear, P pause.",
+    0, -30, 1.05, C.ink, 620)
+  button(self, true, p, "GOT IT", 0, -210, 300, 64, 1.2,
+    function() clear_overlay(self) end)
+end
+
+-- ------------------------------------------------------------ game actions --
+
+local function stars_for(self)
+  local th = self.def.stars or { 0, 0, 0 }
+  if (th[3] or 0) > 0 and self.score >= th[3] then return 3 end
+  if (th[2] or 0) > 0 and self.score >= th[2] then return 2 end
+  return 1
+end
+
+local function end_level(self, won, reason)
+  if self.over then return end
+  self.over = true
+  self.end_pending = won and "win" or "lose"
+  self.end_reason = reason
+  self.end_timer = 1.1
+  if won then
+    confetti(self)
+    audio.play("sfx_mission")
+  end
+end
+
+present_outfit = function(self)
+  if self.screen ~= "play" or self.paused or self.over then return end
+  if self.phase ~= "dress" then return end
+  if self.peek_active then return end
+  self.presented = 1
+  audio.play("sfx_present")
+  local total, match, exact, critics =
+    outfit.present(self.outfit, self.ref, self.peeks_used or 0)
+  self.last_match = match
+  self.last_critics = critics
+  self.last_exact = exact
+  if self.endless then
+    self.endless_score = (self.endless_score or 0) + total
+    self.score = self.endless_score
+  else
+    self.score = total
+  end
+  if exact == 5 then
+    audio.play("sfx_perfect")
+    popup(self, MODEL_X, 560, "PERFECT 5/5!", C.gold)
+    burst(self, MODEL_X, MODEL_Y, C.gold, 10)
+  elseif match >= 400 then
+    popup(self, MODEL_X, 560, "Match " .. match .. " / 500", C.gold)
+  else
+    popup(self, MODEL_X, 560, "Match " .. match .. " / 500", C.orange)
+  end
+  popup(self, MODEL_X, 520, "Critics " .. critics .. " / 3", C.white)
+  update_hud(self)
+  if self.endless then
+    -- Endless: a win serves the client, a loss counts against the run.
+    if outfit.wins(match, critics, total, self.def) then
+      self.clients = (self.clients or 0) + 1
+      popup(self, W / 2, 340, "Client happy! Next guest...", C.green)
+      audio.play("sfx_critic")
+      self.presented = 0
+      next_client(self)
+    else
+      self.failed = (self.failed or 0) + 1
+      popup(self, W / 2, 340, "That guest left!", C.danger)
+      if self.failed >= 3 then
+        self.over = true
+        self.end_pending = "lose"
+        self.end_reason = "Three guests left unhappy!"
+        self.end_timer = 1.1
+      else
+        self.presented = 0
+        next_client(self)
+      end
+    end
+    return
+  end
+  -- Level mode: win needs match + critics + mission.
+  local lv_def = {
+    threshold = self.def.threshold, critics = self.def.critics,
+    mission = self.mission,
+  }
+  if outfit.wins(match, critics, total, lv_def) then
+    end_level(self, true, nil)
+  else
+    end_level(self, false,
+      outfit.lose_reason(match, critics, total, lv_def))
+  end
+end
+
+local function do_autoplay(self)
+  if self.phase ~= "dress" or self.peek_active then return end
+  local step = self.ai_step or 0
+  if step < 5 then
+    local cat = levels.CATS[step + 1]
+    switch_category(self, cat)
+    local idx = self.ref[cat] or 0
+    if idx > 0 then pick_item(self, idx) end
+    self.ai_step = step + 1
+  else
+    self.ai_step = 0
+    present_outfit(self)
+  end
+end
+
+-- ------------------------------------------------------------------ input --
+
+function on_input(self, action_id, action)
+  if action_id == hash("touch") then
+    if action.pressed then
+      -- While a panel is up (pause / win / lose / how-to) stale
+      -- play-screen picks must not eat the click: the win panel's
+      -- NEXT LEVEL button sits inside the wardrobe grid's hitbox,
+      -- and the grid button was checked first, so real clicks on
+      -- NEXT LEVEL and RESUME did nothing. Panels set overlay_up;
+      -- screens without a panel (title, levels, play) keep normal
+      -- picks. (First attempt also gated on screen ~= "play", which
+      -- blocked the title screen's own buttons entirely.)
+      local only_overlay = self.overlay_up
+      for _, p in ipairs(self.pick) do
+        if (not only_overlay or p.overlay) and
+            gui.pick_node(p.node, action.x, action.y) then
+          p.cb()
+          return
+        end
+      end
+    end
+  elseif action_id == hash("pause_key") then
+    if action.pressed then
+      if self.user_paused then
+        msg.post(GAME, "ui_resume", {})
+      elseif self.screen == "play" then
+        msg.post(GAME, "ui_pause", {})
+      end
+    end
+  elseif action_id == hash("peek_key") then
+    if action.pressed then do_peek(self) end
+  elseif action_id == hash("present_key") then
+    if action.pressed then present_outfit(self) end
+  elseif action_id == hash("clear_key") then
+    if action.pressed then do_clear(self) end
+  elseif action_id == hash("autoplay") then
+    if action.pressed then
+      self.autoplay = not self.autoplay
+      self.ai_step = 0
+      print("autoplay", self.autoplay)
+    end
+  elseif action_id == hash("unlock_key") then
+    if action.pressed and self.screen == "title" then
+      msg.post(GAME, "ui_unlock_all", {})
+    end
+  elseif action_id == hash("mute_key") then
+    if action.pressed then msg.post(GAME, "ui_mute", {}) end
+  else
+    for i = 1, 6 do
+      if action_id == hash("item" .. i) then
+        if action.pressed then pick_item(self, i) end
+        return
+      end
+    end
+    for _, cat in ipairs(levels.CATS) do
+      if action_id == hash("cat_" .. cat) then
+        if action.pressed then switch_category(self, cat) end
+        return
+      end
+    end
+  end
+end
+
+-- ----------------------------------------------------------------- update --
+
+local function report_state(self)
+  if html5 then
+    local match, critics = 0, 0
+    if self.ref and self.outfit then
+      match = outfit.match(self.outfit, self.ref)
+      critics = outfit.critic_count(self.outfit)
+    end
+    local mission_txt = ""
+    if self.mission and self.mission.text then
+      mission_txt = string.gsub(self.mission.text, "|", " ")
+    end
+    pcall(html5.run, "document.title='SECONDGLANCE|screen=" .. self.screen ..
+      "|phase=" .. (self.phase or "") ..
+      "|level=" .. (self.level or 0) ..
+      "|endless=" .. (self.endless and 1 or 0) ..
+      "|score=" .. (self.score or 0) ..
+      "|match=" .. match ..
+      "|critics=" .. critics ..
+      "|peeks=" .. (self.peeks_left or 0) ..
+      "|time=" .. math.floor(self.time_left or 0) ..
+      "|ref=" .. (self.ref and outfit.to_string(self.ref) or "0,0,0,0,0") ..
+      "|outfit=" .. (self.outfit and outfit.to_string(self.outfit) or "0,0,0,0,0") ..
+      "|cat=" .. (self.cat or "") ..
+      "|glance=" .. math.max(0, math.ceil(self.glance_left or 0)) ..
+      "|presented=" .. (self.presented or 0) ..
+      "|auto=" .. (self.autoplay and 1 or 0) ..
+      "|paused=" .. (self.paused and 1 or 0) ..
+      "|clients=" .. (self.clients or 0) ..
+      "|failed=" .. (self.failed or 0) ..
+      "|mission=" .. mission_txt .. "'")
+  end
+end
+
+function update(self, dt)
+  self.report_t = (self.report_t or 0) + dt
+  if self.report_t > 0.5 then
+    self.report_t = 0
+    report_state(self)
+  end
+  if self.banner_active and self.banner_timer then
+    self.banner_timer = self.banner_timer - dt
+    if self.banner_timer <= 0 then
+      self.banner_active = false
+      self.banner_timer = nil
+      if self.screen == "play" and not self.paused then
+        clear_overlay(self)
+      end
+    end
+  end
+  if self.paused then return end
+  -- particles
+  for i = #self.particles, 1, -1 do
+    local p = self.particles[i]
+    p.life = p.life - dt
+    if p.life <= 0 then
+      pcall(gui.delete_node, p.node)
+      table.remove(self.particles, i)
+    else
+      local pos = gui.get_position(p.node)
+      if p.confetti then
+        p.vy = p.vy - 60 * dt
+        pos.x = pos.x + p.vx * dt + math.sin(p.life * 9) * 30 * dt
+      else
+        p.vy = p.vy - 900 * dt
+        pos.x = pos.x + p.vx * dt
+      end
+      pos.y = pos.y + p.vy * dt
+      gui.set_position(p.node, pos)
+      local c = gui.get_color(p.node)
+      c.w = math.max(0, math.min(1, p.life / 0.5))
+      gui.set_color(p.node, c)
+    end
+  end
+  -- score popups
+  for i = #self.popups, 1, -1 do
+    local p = self.popups[i]
+    p.life = p.life - dt
+    if p.life <= 0 then
+      pcall(gui.delete_node, p.node)
+      table.remove(self.popups, i)
+    else
+      local pos = gui.get_position(p.node)
+      pos.y = pos.y + 42 * dt
+      gui.set_position(p.node, pos)
+      local c = gui.get_color(p.node)
+      c.w = math.max(0, p.life / 0.9)
+      gui.set_color(p.node, c)
+    end
+  end
+  if self.screen ~= "play" then return end
+  -- countdown (timer runs in both phases; glance is part of the level)
+  if not self.over then
+    self.elapsed = self.elapsed + dt
+    if not self.endless then
+      self.time_left = self.time_left - dt
+      if self.time_left <= 0 then
+        self.time_left = 0
+        update_hud(self)
+        end_level(self, false, "Out of time - try again!")
+      elseif math.floor(self.time_left) ~= math.floor(self.time_left + dt) then
+        update_hud(self)
+      end
+    end
+  end
+  -- glance phase countdown
+  if self.phase == "glance" and not self.over then
+    self.glance_left = (self.glance_left or 0) - dt
+    if self.glance_left <= 0 then
+      self.glance_left = 0
+      -- curtain drop: a dark panel slides over the model, then fades
+      self.phase = "curtain"
+      self.curtain_timer = 0.55
+      self.curtain = new_box(self, false, nil, MODEL_X, 700, 280, 480, C.indigo)
+      gui.animate(self.curtain, gui.PROP_POSITION,
+        vmath.vector3(MODEL_X, MODEL_Y, 0), gui.EASING_IN, 0.3)
+      audio.play("sfx_tick")
+    end
+    update_hud(self)
+  elseif self.phase == "curtain" and not self.over then
+    self.curtain_timer = (self.curtain_timer or 0) - dt
+    if self.curtain_timer <= 0 then
+      if self.curtain then
+        local c = self.curtain
+        gui.animate(c, gui.PROP_COLOR, vmath.vector4(0.16, 0.14, 0.32, 0),
+          gui.EASING_IN, 0.25, 0, function()
+            pcall(gui.delete_node, c)
+          end)
+        self.curtain = nil
+      end
+      if self.card_frame then gui.set_color(self.card_frame, C.clear) end
+      if self.card_label then gui.set_text(self.card_label, "") end
+      if self.client_label then gui.set_text(self.client_label, "") end
+      self.outfit = outfit.new()
+      sync_model(self, self.outfit)
+      self.phase = "dress"
+      update_critics(self)
+      update_hud(self)
+    end
+  end
+  -- peek timer: re-show the reference for 2s, dressing locked
+  if self.peek_active then
+    self.peek_timer = (self.peek_timer or 0) - dt
+    if self.peek_timer <= 0 then
+      self.peek_active = false
+      sync_model(self, self.outfit)
+      if self.card_frame then gui.set_color(self.card_frame, C.clear) end
+      if self.card_label then gui.set_text(self.card_label, "") end
+      update_critics(self)
+    end
+  end
+  -- win/lose delay, then hand over to the controller
+  if self.end_pending then
+    self.end_timer = self.end_timer - dt
+    if self.end_timer <= 0 then
+      local pending = self.end_pending
+      local reason = self.end_reason
+      self.end_pending = nil
+      self.end_reason = nil
+      if pending == "win" then
+        msg.post(GAME, "ui_level_won",
+          { score = self.score, stars = stars_for(self),
+            match = self.last_match or 0, critics = self.last_critics or 0 })
+      else
+        msg.post(GAME, "ui_level_lost",
+          { score = self.score, reason = reason })
+      end
+    end
+  end
+  -- autoplay (verification aid): dress the exact reference, then present.
+  if self.autoplay and not self.over and self.screen == "play" then
+    self.ai_timer = (self.ai_timer or 0) - dt
+    if self.ai_timer <= 0 then
+      self.ai_timer = 0.9
+      do_autoplay(self)
+    end
+  end
+end
+
+-- --------------------------------------------------------------- messages --
+
+function on_message(self, message_id, message, sender)
+  if message_id == hash("show_title") then
+    self.muted = message.muted or false
+    self.endless_best = message.endless_best or 0
+    show_title(self, message)
+  elseif message_id == hash("show_levels") then
+    self.muted = message.muted or false
+    show_levels(self, message)
+  elseif message_id == hash("show_play") then
+    self.muted = message.muted or false
+    show_play(self, message)
+  elseif message_id == hash("show_win") then
+    show_win(self, message)
+  elseif message_id == hash("show_lose") then
+    show_lose(self, message)
+  elseif message_id == hash("show_howto") then
+    show_howto(self)
+  elseif message_id == hash("show_pause") then
+    self.user_paused = true
+    self.banner_active = false
+    show_pause(self)
+  elseif message_id == hash("hide_pause") then
+    self.user_paused = false
+    self.paused = false
+    clear_overlay(self)
+  elseif message_id == hash("gd_pause") then
+    self.paused = true
+  elseif message_id == hash("gd_resume") then
+    self.paused = self.user_paused or false
+  elseif message_id == hash("set_mute") then
+    self.muted = message.muted
+    if self.mute_label then
+      gui.set_text(self.mute_label,
+        self.muted and "SOUND OFF" or "SOUND ON")
+    end
+  end
+end
+
+-- -------------------------------------------------------------------- init --
+
+function init(self)
+  msg.post(".", "acquire_input_focus")
+  self.nodes = {}
+  self.onodes = {}
+  self.pick = {}
+  self.grid_nodes = {}
+  self.tab_nodes = {}
+  self.model_nodes = {}
+  self.critic_nodes = {}
+  self.particles = {}
+  self.popups = {}
+  self.screen = "title"
+  self.phase = "title"
+  self.muted = false
+  self.autoplay = false
+  self.paused = false
+  self.user_paused = false
+  self.over = false
+  self.score = 0
+  self.time_left = 0
+  self.report_t = 0
+  self.ai_timer = 1.0
+  self.ai_step = 0
+  self.elapsed = 0
+  self.ref = outfit.new()
+  self.outfit = outfit.new()
+  self.cat = "top"
+  self.peeks_left = 0
+  self.peeks_used = 0
+  self.peek_active = false
+  self.peek_timer = 0
+  self.glance_left = 0
+  self.presented = 0
+  self.clients = 0
+  self.failed = 0
+  self.overlay_up = false
+end

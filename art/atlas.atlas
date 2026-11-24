@@ -1,0 +1,111 @@
+images {
+  image: "/art/background.png"
+}
+images {
+  image: "/art/body.png"
+}
+images {
+  image: "/art/g_top_1.png"
+}
+images {
+  image: "/art/g_top_2.png"
+}
+images {
+  image: "/art/g_top_3.png"
+}
+images {
+  image: "/art/g_top_4.png"
+}
+images {
+  image: "/art/g_top_5.png"
+}
+images {
+  image: "/art/g_top_6.png"
+}
+images {
+  image: "/art/g_bottom_1.png"
+}
+images {
+  image: "/art/g_bottom_2.png"
+}
+images {
+  image: "/art/g_bottom_3.png"
+}
+images {
+  image: "/art/g_bottom_4.png"
+}
+images {
+  image: "/art/g_bottom_5.png"
+}
+images {
+  image: "/art/g_bottom_6.png"
+}
+images {
+  image: "/art/g_shoes_1.png"
+}
+images {
+  image: "/art/g_shoes_2.png"
+}
+images {
+  image: "/art/g_shoes_3.png"
+}
+images {
+  image: "/art/g_shoes_4.png"
+}
+images {
+  image: "/art/g_shoes_5.png"
+}
+images {
+  image: "/art/g_hat_1.png"
+}
+images {
+  image: "/art/g_hat_2.png"
+}
+images {
+  image: "/art/g_hat_3.png"
+}
+images {
+  image: "/art/g_hat_4.png"
+}
+images {
+  image: "/art/g_hat_5.png"
+}
+images {
+  image: "/art/g_extra_1.png"
+}
+images {
+  image: "/art/g_extra_2.png"
+}
+images {
+  image: "/art/g_extra_3.png"
+}
+images {
+  image: "/art/g_extra_4.png"
+}
+images {
+  image: "/art/g_extra_5.png"
+}
+images {
+  image: "/art/g_extra_6.png"
+}
+images {
+  image: "/art/crit_1.png"
+}
+images {
+  image: "/art/crit_2.png"
+}
+images {
+  image: "/art/crit_3.png"
+}
+images {
+  image: "/art/particle.png"
+}
+images {
+  image: "/art/star.png"
+}
+images {
+  image: "/art/lock.png"
+}
+margin: 0
+extrude_borders: 2
+inner_padding: 0
